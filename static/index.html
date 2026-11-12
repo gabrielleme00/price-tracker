@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+  <meta charset="UTF-8">
+  <title>Price Tracker Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body class="bg-gray-900 text-gray-100 min-h-screen p-6">
+  <div class="max-w-6xl mx-auto">
+    <div class="flex justify-between items-center mb-8">
+      <h1 class="text-3xl font-bold">🛒 VPS Price Tracker</h1>
+      <div class="space-x-4">
+        <button onclick="triggerScrape()"
+          class="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded font-semibold">Executar Varredura Agora</button>
+        <button onclick="openModal()" class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded font-semibold">+
+          Adicionar Produto</button>
+      </div>
+    </div>
+
+    <!-- Products Table -->
+    <div class="bg-gray-800 rounded-lg shadow overflow-hidden mb-8">
+      <table class="w-full text-left border-collapse">
+        <thead>
+          <tr class="bg-gray-700 text-gray-300 text-sm uppercase">
+            <th class="p-4">Nome</th>
+            <th class="p-4">Loja</th>
+            <th class="p-4">Preço Atual</th>
+            <th class="p-4">Preço Alvo</th>
+            <th class="p-4">Última Checagem</th>
+            <th class="p-4">Ações</th>
+          </tr>
+        </thead>
+        <tbody id="products-table" class="divide-y divide-gray-700">
+          <!-- Dynamic Rows -->
+        </tbody>
+      </table>
+    </div>
+
+    <!-- History Chart Modal / Section -->
+    <div id="chart-section" class="bg-gray-800 rounded-lg p-6 hidden">
+      <div class="flex justify-between items-center mb-4">
+        <h2 id="chart-title" class="text-xl font-bold">Histórico de Preços</h2>
+        <button onclick="closeChart()" class="text-gray-400 hover:text-white font-bold">✕ Fechar</button>
+      </div>
+      <canvas id="priceChart" height="100"></canvas>
+    </div>
+  </div>
+
+  <!-- Add Modal -->
+  <div id="addModal" class="fixed inset-0 bg-black/60 flex items-center justify-center hidden">
+    <div class="bg-gray-800 p-6 rounded-lg w-full max-w-md">
+      <h2 class="text-xl font-bold mb-4">Adicionar Novo Produto</h2>
+      <form id="addProductForm" onsubmit="submitProduct(event)" class="space-y-4">
+        <div>
+          <label class="block text-sm mb-1">Nome do Produto</label>
+          <input type="text" id="name" required class="w-full bg-gray-900 border border-gray-700 p-2 rounded">
+        </div>
+        <div>
+          <label class="block text-sm mb-1">Loja</label>
+          <select id="store" class="w-full bg-gray-900 border border-gray-700 p-2 rounded">
+            <option value="AliExpress">AliExpress</option>
+            <option value="SHEIN">SHEIN</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-sm mb-1">URL do Produto</label>
+          <input type="url" id="url" required class="w-full bg-gray-900 border border-gray-700 p-2 rounded">
+        </div>
+        <div>
+          <label class="block text-sm mb-1">Seletor CSS do Preço</label>
+          <input type="text" id="css_selector" required placeholder="ex: .product-price-current"
+            class="w-full bg-gray-900 border border-gray-700 p-2 rounded">
+        </div>
+        <div>
+          <label class="block text-sm mb-1">Preço Alvo (R$)</label>
+          <input type="number" step="0.01" id="target_price" required
+            class="w-full bg-gray-900 border border-gray-700 p-2 rounded">
+        </div>
+        <div class="flex justify-end space-x-2 mt-4">
+          <button type="button" onclick="closeModal()" class="bg-gray-600 px-4 py-2 rounded">Cancelar</button>
+          <button type="submit" class="bg-indigo-600 px-4 py-2 rounded">Salvar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    let myChart = null;
+
+    async function loadProducts() {
+      const res = await fetch('/api/products');
+      const products = await res.json();
+      const tbody = document.getElementById('products-table');
+      tbody.innerHTML = '';
+
+      products.forEach(p => {
+        const isTriggered = p.last_price !== null && p.last_price <= p.target_price;
+        const priceClass = isTriggered ? 'text-emerald-400 font-bold' : 'text-gray-100';
+        tbody.innerHTML += `
+                    <tr class="hover:bg-gray-750">
+                        <td class="p-4"><a href="${p.url}" target="_blank" class="text-blue-400 hover:underline">${p.name}</a></td>
+                        <td class="p-4">${p.store}</td>
+                        <td class="p-4 ${priceClass}">${p.last_price !== null ? 'R$ ' + p.last_price.toFixed(2) : 'Aguardando...'}</td>
+                        <td class="p-4">R$ ${p.target_price.toFixed(2)}</td>
+                        <td class="p-4 text-sm text-gray-400">${p.last_scraped || 'Nunca'}</td>
+                        <td class="p-4 space-x-2">
+                            <button onclick="viewHistory(${p.id}, '${p.name}')" class="bg-blue-600 hover:bg-blue-500 px-3 py-1 rounded text-sm">Histórico</button>
+                            <button onclick="deleteProduct(${p.id})" class="bg-rose-600 hover:bg-rose-500 px-3 py-1 rounded text-sm">Excluir</button>
+                        </td>
+                    </tr>
+                `;
+      });
+    }
+
+    function openModal() { document.getElementById('addModal').classList.remove('hidden'); }
+    function closeModal() { document.getElementById('addModal').classList.add('hidden'); }
+
+    async function submitProduct(e) {
+      e.preventDefault();
+      const data = {
+        name: document.getElementById('name').value,
+        store: document.getElementById('store').value,
+        url: document.getElementById('url').value,
+        css_selector: document.getElementById('css_selector').value,
+        target_price: parseFloat(document.getElementById('target_price').value)
+      };
+      await fetch('/api/products', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      closeModal();
+      loadProducts();
+    }
+
+    async function deleteProduct(id) {
+      if (confirm('Tem certeza que deseja excluir?')) {
+        await fetch(`/api/products/${id}`, { method: 'DELETE' });
+        loadProducts();
+      }
+    }
+
+    async function triggerScrape() {
+      await fetch('/api/scrape-now', { method: 'POST' });
+      alert('Varredura acionada em segundo plano!');
+    }
+
+    async function viewHistory(id, name) {
+      const res = await fetch(`/api/history/${id}`);
+      const data = await res.json();
+
+      document.getElementById('chart-section').classList.remove('hidden');
+      document.getElementById('chart-title').innerText = `Histórico de Preços: ${name}`;
+
+      const labels = data.map(d => new Date(d.scraped_at).toLocaleString());
+      const prices = data.map(d => d.price);
+
+      if (myChart) myChart.destroy();
+      const ctx = document.getElementById('priceChart').getContext('2d');
+      myChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: 'Preço (R$)',
+            data: prices,
+            borderColor: '#3b82f6',
+            tension: 0.1
+          }]
+        }
+      });
+    }
+
+    function closeChart() {
+      document.getElementById('chart-section').classList.add('hidden');
+    }
+
+    loadProducts();
+  </script>
+</body>
+
+</html>

@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  price-tracker:
+    build: .
+    container_name: price-tracker
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - TELEGRAM_BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN
+      - TELEGRAM_CHAT_ID=YOUR_TELEGRAM_CHAT_ID
+    shm_size: '512mb'
+    mem_limit: '1.2g'
