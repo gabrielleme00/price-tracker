@@ -7,7 +7,7 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from apscheduler.schedulers.asyncio import AsyncScheduler
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from playwright.async_api import async_playwright
 import requests
@@ -147,7 +147,7 @@ async def run_scraping_job():
     send_telegram("\n".join(digest_lines))
 
 # Scheduler setup
-scheduler = AsyncScheduler()
+scheduler = AsyncIOScheduler()
 # Uncomment to enable automatic 3-hour interval:
 # scheduler.add_job(run_scraping_job, IntervalTrigger(hours=3))
 
