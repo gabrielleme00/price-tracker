@@ -13,12 +13,14 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import requests
 
-# Módulos do projeto adaptado
 from utils.browser_config import get_browser_context
 from utils.page_handler import setup_page_handlers
 from utils.captcha_monitor import with_captcha_check, CaptchaDetected
 
 DEBUG_SAVE_DEBUG = True
+DB_PATH = "data/tracker.db"
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,10 +34,6 @@ app = FastAPI(title="Self-Hosted Price Tracker")
 os.makedirs("static", exist_ok=True)
 os.makedirs("data", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
-
-DB_PATH = "data/tracker.db"
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 
 def init_db():
@@ -64,10 +62,17 @@ def init_db():
             product_id INTEGER,
             price REAL,
             status TEXT,
+            sizes TEXT DEFAULT '',
             scraped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE
         )
     """)
+    # Migração: adiciona coluna sizes em bancos antigos
+    try:
+        cursor.execute("ALTER TABLE price_history ADD COLUMN sizes TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+
     conn.commit()
     conn.close()
 
@@ -92,11 +97,10 @@ def send_telegram(message: str):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         logger.warning("Token ou Chat ID do Telegram não configurados.")
         return
-        
+
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    # Alterado de Markdown para HTML para suportar URLs complexas perfeitamente
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
-    
+
     max_retries = 3
     for attempt in range(1, max_retries + 1):
         try:
@@ -108,7 +112,7 @@ def send_telegram(message: str):
                 logger.error(f"Erro ao enviar Telegram (Tentativa {attempt}/{max_retries}): {resp.text}")
         except Exception as e:
             logger.error(f"Exceção ao enviar notificação Telegram (Tentativa {attempt}/{max_retries}): {e}")
-        
+
         if attempt < max_retries:
             time.sleep(3)
 
@@ -125,6 +129,20 @@ def process_image_url(image_url: str) -> str:
     return base_url
 
 
+def _utc_iso(ts: Optional[str]) -> Optional[str]:
+    """
+    SQLite CURRENT_TIMESTAMP returns 'YYYY-MM-DD HH:MM:SS' (UTC, no tz marker).
+    The browser interprets that string as LOCAL time and shifts it incorrectly.
+    We normalize to ISO 8601 with a 'Z' suffix so JS converts UTC → local properly.
+    """
+    if not ts:
+        return ts
+    # Already has a tz marker / ISO format? Leave it alone.
+    if "T" in ts or ts.endswith("Z") or "+" in ts[10:]:
+        return ts
+    return ts.replace(" ", "T") + "Z"
+
+
 @with_captcha_check
 def navigate_to_product(page, url: str, delay: int = 2):
     """Navega para a URL verificando se houve redirecionamento para captcha."""
@@ -134,7 +152,7 @@ def navigate_to_product(page, url: str, delay: int = 2):
 
 @with_captcha_check
 def scrape_single_shein_product(page, prod: Dict) -> Dict:
-    """Extrai o preço e a primeira foto de 1 URL da SHEIN."""
+    """Extrai o preço, a primeira foto e os tamanhos disponíveis de 1 URL da SHEIN."""
     retry_count = 0
     max_retries = 3
     url = prod["url"]
@@ -169,7 +187,28 @@ def scrape_single_shein_product(page, prod: Dict) -> Dict:
             except Exception as e:
                 logger.warning(f"Não foi possível extrair a imagem: {e}")
 
-            return {"price": price, "image_url": image_url}
+            # ---- Extração dos tamanhos disponíveis ----
+            sizes: List[str] = []
+            try:
+                page.wait_for_selector(
+                    '.product-intro__size-radio[aria-disabled="false"]',
+                    timeout=3500,
+                    state="visible"
+                )
+                size_nodes = page.locator('.product-intro__size-radio[aria-disabled="false"]').all()
+                for node in size_nodes:
+                    try:
+                        txt = (node.text_content() or "").strip()
+                        txt = " ".join(txt.split())
+                        if txt and txt not in sizes:
+                            sizes.append(txt)
+                    except Exception:
+                        continue
+                logger.info(f"Tamanhos extraídos para '{prod['name']}': {sizes or 'nenhum'}")
+            except Exception as e:
+                logger.warning(f"Não foi possível extrair tamanhos de '{prod['name']}': {e}")
+
+            return {"price": price, "image_url": image_url, "sizes": sizes}
 
         except CaptchaDetected:
             raise
@@ -205,17 +244,22 @@ def run_sync_batch_scrape(products: List[Dict]) -> List[str]:
 
         for prod in products:
             logger.info(f"Verificando [{prod['id']}] {prod['name']} -> {prod['url']}")
-            
+
             last_recorded_price = _get_last_price(prod["id"])
             price = None
             image_url = ""
+            sizes: List[str] = []
             status = "ok"
 
             try:
                 result = scrape_single_shein_product(page, prod)
                 price = result["price"]
                 image_url = result["image_url"]
-                logger.info(f"Preço extraído para '{prod['name']}': R$ {price:.2f} | Imagem: {image_url}")
+                sizes = result.get("sizes", [])
+                logger.info(
+                    f"Preço extraído para '{prod['name']}': R$ {price:.2f} | "
+                    f"Tamanhos: {sizes or '—'} | Imagem: {image_url}"
+                )
                 time.sleep(2)
 
             except CaptchaDetected:
@@ -232,22 +276,24 @@ def run_sync_batch_scrape(products: List[Dict]) -> List[str]:
                 _save_scrape_result(prod["id"], None, "", status)
                 continue
 
-            _save_scrape_result(prod["id"], price, image_url, status)
+            _save_scrape_result(prod["id"], price, image_url, status, sizes)
 
             is_price_lower = last_recorded_price is None or price < last_recorded_price
             if is_price_lower:
                 price_dropped_any = True
 
             is_target_reached = price <= prod["target_price"]
-            
+
             prefix = "🚨 " if is_target_reached else ("📉 " if is_price_lower else "▪️ ")
             drop_notice = " <i>(Preço Abaixou!)</i>" if is_price_lower and last_recorded_price is not None else ""
 
-            # Mensagem limpa estruturada com link HTML funcional
+            sizes_display = ", ".join(sizes) if sizes else "—"
+
             product_msg = (
                 f"{prefix} <a href=\"{prod['url']}\"><b>{prod['name']}</b></a> ({prod['store']})\n"
                 f"   💰 Preço: <b>R$ {price:.2f}</b>{drop_notice}\n"
-                f"   🎯 Alvo: R$ {prod['target_price']:.2f}"
+                f"   🎯 Alvo: R$ {prod['target_price']:.2f}\n"
+                f"   📏 Tamanhos: {sizes_display}"
             )
             digest_lines.append(product_msg)
 
@@ -276,20 +322,30 @@ def run_sync_batch_scrape(products: List[Dict]) -> List[str]:
 def _get_last_price(product_id: int) -> Optional[float]:
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT price FROM price_history WHERE product_id = ? AND price IS NOT NULL ORDER BY scraped_at DESC LIMIT 1", (product_id,))
+    cursor.execute(
+        "SELECT price FROM price_history WHERE product_id = ? AND price IS NOT NULL ORDER BY scraped_at DESC LIMIT 1",
+        (product_id,)
+    )
     row = cursor.fetchone()
     conn.close()
     return row[0] if row else None
 
 
-def _save_scrape_result(product_id: int, price: Optional[float], image_url: str, status: str):
+def _save_scrape_result(
+    product_id: int,
+    price: Optional[float],
+    image_url: str,
+    status: str,
+    sizes: Optional[List[str]] = None,
+):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     if image_url:
         cursor.execute("UPDATE products SET image_url = ? WHERE id = ?", (image_url, product_id))
+    sizes_str = ",".join(sizes) if sizes else ""
     cursor.execute(
-        "INSERT INTO price_history (product_id, price, status) VALUES (?, ?, ?)",
-        (product_id, price, status)
+        "INSERT INTO price_history (product_id, price, status, sizes) VALUES (?, ?, ?, ?)",
+        (product_id, price, status, sizes_str)
     )
     conn.commit()
     conn.close()
@@ -314,14 +370,14 @@ async def run_scraping_job():
         send_telegram("\n\n".join(digest_lines))
 
 
-# Scheduler a cada 3 horas
 scheduler = AsyncIOScheduler()
 scheduler.add_job(
-    run_scraping_job, 
-    CronTrigger(hour="*/3", minute=0), 
+    run_scraping_job,
+    CronTrigger(hour="*/3", minute=0),
     id="scraping_cron_job",
     replace_existing=True
 )
+
 
 @app.on_event("startup")
 async def startup_event():
@@ -340,14 +396,17 @@ def get_products():
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT p.*, 
+        SELECT p.*,
         (SELECT price FROM price_history WHERE product_id = p.id ORDER BY scraped_at DESC LIMIT 1) as last_price,
         (SELECT status FROM price_history WHERE product_id = p.id ORDER BY scraped_at DESC LIMIT 1) as last_status,
+        (SELECT sizes FROM price_history WHERE product_id = p.id ORDER BY scraped_at DESC LIMIT 1) as last_sizes,
         (SELECT scraped_at FROM price_history WHERE product_id = p.id ORDER BY scraped_at DESC LIMIT 1) as last_scraped
         FROM products p
     """)
     rows = [dict(row) for row in cursor.fetchall()]
     conn.close()
+    for r in rows:
+        r["last_scraped"] = _utc_iso(r.get("last_scraped"))
     return rows
 
 
@@ -392,11 +451,14 @@ def get_history(product_id: int):
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT price, status, scraped_at FROM price_history WHERE product_id = ? ORDER BY scraped_at ASC LIMIT 100",
+        "SELECT price, status, sizes, scraped_at FROM price_history "
+        "WHERE product_id = ? ORDER BY scraped_at ASC LIMIT 100",
         (product_id,)
     )
     rows = [dict(row) for row in cursor.fetchall()]
     conn.close()
+    for r in rows:
+        r["scraped_at"] = _utc_iso(r.get("scraped_at"))
     return rows
 
 

@@ -5,13 +5,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>O Meu Precinho</title>
-  <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
-  <!-- Chart.js para o gráfico de histórico -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <!-- FontAwesome para ícones -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <!-- Fontes retrô/fofas -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link
@@ -39,8 +35,7 @@
       font-family: 'Nunito', ui-sans-serif, system-ui, sans-serif;
       color: var(--ink);
       background-color: var(--lemon);
-      background-image:
-        radial-gradient(rgba(230, 230, 250, 0.95) 2px, transparent 2px);
+      background-image: radial-gradient(rgba(230, 230, 250, 0.95) 2px, transparent 2px);
       background-size: 26px 26px;
       background-position: 0 0;
     }
@@ -54,7 +49,6 @@
       font-family: 'Fredoka', ui-sans-serif, sans-serif;
     }
 
-    /* ---------- Cards estilo retrô ---------- */
     .retro-card {
       position: relative;
       background: #fff;
@@ -75,7 +69,6 @@
       box-shadow: 8px 8px 0 rgba(10, 186, 181, 0.35);
     }
 
-    /* ---------- Botões ---------- */
     .btn-retro {
       display: inline-flex;
       align-items: center;
@@ -121,7 +114,6 @@
       color: var(--ink);
     }
 
-    /* ---------- Botões pequenos (tabela) ---------- */
     .btn-mini {
       display: inline-flex;
       align-items: center;
@@ -162,7 +154,6 @@
       color: var(--ink);
     }
 
-    /* ---------- Inputs ---------- */
     .retro-input {
       width: 100%;
       background: var(--paper);
@@ -209,7 +200,6 @@
       margin-bottom: .4rem;
     }
 
-    /* ---------- Tabela ---------- */
     .retro-table thead tr {
       background: var(--lavender);
       border-bottom: 3px solid var(--ink);
@@ -239,7 +229,6 @@
       background: var(--paper);
     }
 
-    /* ---------- Badges ---------- */
     .badge {
       display: inline-flex;
       align-items: center;
@@ -275,7 +264,23 @@
       color: #fff;
     }
 
-    /* ---------- Thumbnails ---------- */
+    /* Badges de tamanho */
+    .badge-size {
+      background: var(--peach);
+      color: var(--ink);
+      font-size: .66rem;
+      padding: .1rem .45rem;
+      border-width: 1.5px;
+      border-radius: 8px;
+      box-shadow: 1px 1px 0 var(--ink);
+      line-height: 1.25;
+      white-space: nowrap;
+    }
+
+    .sizes-cell {
+      max-width: 180px;
+    }
+
     .thumb {
       width: 3rem;
       height: 3rem;
@@ -295,7 +300,6 @@
       font-size: .8rem;
     }
 
-    /* ---------- Input inline de nome ---------- */
     .name-input {
       width: 100%;
       background: transparent;
@@ -321,7 +325,6 @@
       box-shadow: 0 0 0 3px rgba(230, 230, 250, 0.9);
     }
 
-    /* ---------- Modal ---------- */
     #chartModal {
       background: rgba(74, 63, 85, .45);
       backdrop-filter: blur(4px);
@@ -334,7 +337,6 @@
       box-shadow: 10px 10px 0 var(--lavender);
     }
 
-    /* ---------- Fita decorativa (washi tape) ---------- */
     .tape {
       position: absolute;
       top: -13px;
@@ -344,9 +346,7 @@
       border: 2px solid var(--ink);
       border-radius: 4px;
       transform: rotate(-3deg);
-      background: repeating-linear-gradient(45deg,
-          var(--pink) 0 6px,
-          var(--peach) 6px 12px);
+      background: repeating-linear-gradient(45deg, var(--pink) 0 6px, var(--peach) 6px 12px);
     }
 
     .logo-box {
@@ -373,7 +373,6 @@
 
   <div class="max-w-6xl mx-auto px-4 py-8">
 
-    <!-- Header -->
     <header class="retro-card shadow-pink flex flex-col sm:flex-row justify-between items-center p-6 mb-10 gap-4">
       <div class="flex items-center gap-4">
         <div class="logo-box w-14 h-14 flex items-center justify-center text-2xl font-bold">
@@ -393,7 +392,6 @@
       </button>
     </header>
 
-    <!-- Formulário de Cadastro -->
     <div class="retro-card shadow-peach p-6 mb-10">
       <div class="tape"></div>
       <h2 class="font-display text-sm font-semibold uppercase tracking-[0.14em] mb-4 flex items-center gap-2"
@@ -419,15 +417,12 @@
           <label class="field-label" for="target_price">Preço Alvo (R$)</label>
           <div class="flex gap-2">
             <input type="number" step="0.01" id="target_price" placeholder="120.00" required class="retro-input">
-            <button type="submit" class="btn-retro btn-teal text-sm whitespace-nowrap">
-              Adicionar
-            </button>
+            <button type="submit" class="btn-retro btn-teal text-sm whitespace-nowrap">Adicionar</button>
           </div>
         </div>
       </form>
     </div>
 
-    <!-- Tabela de Produtos -->
     <div class="retro-card shadow-teal overflow-hidden">
       <div class="p-6 flex justify-between items-center" style="border-bottom: 3px solid var(--ink);">
         <h2 class="font-display text-lg font-semibold" style="color: var(--ink);">Produtos Monitorados</h2>
@@ -442,13 +437,12 @@
               <th>Loja</th>
               <th>Preço Atual</th>
               <th>Alvo</th>
+              <th>Tamanhos</th>
               <th>Status</th>
               <th class="text-right">Ações</th>
             </tr>
           </thead>
-          <tbody id="productTableBody" class="text-sm">
-            <!-- Carregado via JS -->
-          </tbody>
+          <tbody id="productTableBody" class="text-sm"></tbody>
         </table>
       </div>
     </div>
@@ -463,6 +457,8 @@
           <h3 id="modalProductName" class="font-display text-xl font-semibold" style="color: var(--ink);">
             Histórico de Preços</h3>
           <p class="text-xs font-bold" style="color: var(--muted);">Evolução do valor do produto ao longo do tempo</p>
+          <p id="modalSizes" class="text-xs font-bold mt-2 flex flex-wrap items-center gap-1"
+            style="color: var(--muted);"></p>
         </div>
         <button onclick="closeChartModal()"
           class="w-9 h-9 flex items-center justify-center shrink-0 transition-transform duration-150 hover:-translate-y-0.5"
@@ -476,20 +472,28 @@
     </div>
   </div>
 
-  <!-- Scripts da Interface -->
   <script>
     let priceChartInstance = null;
+    let currentProducts = [];
+
+    function renderSizesBadges(sizesStr, emptyFallback = '<span class="text-xs italic" style="color:#B4AABD;">—</span>') {
+      const arr = (sizesStr || "").split(",").map(s => s.trim()).filter(Boolean);
+      if (!arr.length) return emptyFallback;
+      return arr.map(s => `<span class="badge badge-size">${s}</span>`).join("");
+    }
 
     async function loadProducts() {
       try {
         const res = await fetch('/api/products');
         const products = await res.json();
+        currentProducts = products;
+
         const tbody = document.getElementById('productTableBody');
         document.getElementById('productCount').innerText = `${products.length} itens`;
         tbody.innerHTML = '';
 
         if (products.length === 0) {
-          tbody.innerHTML = `<tr><td colspan="7" class="text-center py-12 font-bold" style="color: var(--muted);">Nenhum produto cadastrado ainda.</td></tr>`;
+          tbody.innerHTML = `<tr><td colspan="8" class="text-center py-12 font-bold" style="color: var(--muted);">Nenhum produto cadastrado ainda.</td></tr>`;
           return;
         }
 
@@ -506,20 +510,23 @@
 
           const tr = document.createElement('tr');
           tr.innerHTML = `
-                        <td class="py-4 px-4">${imgTag}</td>
-                        <td class="py-4 px-4">
+                        <td class="py-4 px-6">${imgTag}</td>
+                        <td class="py-4 px-6">
                             <div class="flex items-center gap-1.5">
                                 <input type="text" value="${p.name}" id="name-${p.id}" class="name-input" />
                                 <button onclick="updateName(${p.id})" title="Salvar Nome" class="btn-mini btn-lemon"><i class="fa-solid fa-floppy-disk"></i></button>
                             </div>
                         </td>
-                        <td class="py-4 px-4"><span class="badge badge-store">${p.store}</span></td>
-                        <td class="py-4 px-4">${priceBadge}</td>
-                        <td class="py-4 px-4 font-display font-semibold" style="color: var(--ink);">R$ ${p.target_price.toFixed(2)}</td>
-                        <td class="py-4 px-4"><span class="text-xs font-bold" style="color: var(--muted);">${p.last_status || 'Aguardando'}</span></td>
-                        <td class="py-4 px-4 text-right whitespace-nowrap">
+                        <td class="py-4 px-6"><span class="badge badge-store">${p.store}</span></td>
+                        <td class="py-4 px-6">${priceBadge}</td>
+                        <td class="py-4 px-6 font-display font-semibold" style="color: var(--ink);">R$ ${p.target_price.toFixed(2)}</td>
+                        <td class="py-4 px-6 sizes-cell">
+                            <div class="flex flex-wrap gap-1">${renderSizesBadges(p.last_sizes)}</div>
+                        </td>
+                        <td class="py-4 px-6"><span class="text-xs font-bold" style="color: var(--muted);">${p.last_status || 'Aguardando'}</span></td>
+                        <td class="py-4 px-6 text-right whitespace-nowrap">
                             <div class="flex justify-end gap-1.5">
-                                <button onclick="openChart(${p.id}, '${p.name.replace(/'/g, "\\'")}')" class="btn-mini btn-lavender" title="Ver Histórico"><i class="fa-solid fa-chart-area"></i> Gráfico</button>
+                                <button onclick="openChart(${p.id})" class="btn-mini btn-lavender" title="Ver Histórico"><i class="fa-solid fa-chart-area"></i> Gráfico</button>
                                 <a href="${p.url}" target="_blank" class="btn-mini btn-white" title="Abrir Link"><i class="fa-solid fa-external-link-alt"></i></a>
                                 <button onclick="deleteProduct(${p.id})" class="btn-mini btn-pink" title="Excluir"><i class="fa-solid fa-trash"></i></button>
                             </div>
@@ -599,8 +606,34 @@
       }
     }
 
-    async function openChart(productId, productName) {
-      document.getElementById('modalProductName').innerText = productName;
+    async function openChart(productId) {
+      const product = currentProducts.find(p => p.id === productId) || {};
+
+      document.getElementById('modalProductName').innerText =
+        product.name || 'Histórico de Preços';
+
+      // Descobre o timezone local do navegador do usuário
+      const localTZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const tzLabel = (Intl.DateTimeFormat('pt-BR', { timeZoneName: 'short' })
+        .formatToParts(new Date())
+        .find(p => p.type === 'timeZoneName') || {}).value || localTZ;
+
+      // Subtítulo: mostra o fuso local em uso
+      let subtitle = document.querySelector('#chartModal p.text-xs.font-bold');
+      if (subtitle) {
+        subtitle.innerHTML = `Evolução do valor do produto ao longo do tempo · <b>Horário local (${tzLabel})</b>`;
+      }
+
+      // Badges de tamanho continuam iguais
+      const sizesEl = document.getElementById('modalSizes');
+      const sizesArr = (product.last_sizes || "").split(",").map(s => s.trim()).filter(Boolean);
+      if (sizesArr.length) {
+        sizesEl.innerHTML = `<span class="mr-1">📏 Tamanhos disponíveis:</span>` +
+          sizesArr.map(s => `<span class="badge badge-size">${s}</span>`).join("");
+      } else {
+        sizesEl.innerHTML = `<span style="color:#B4AABD;font-style:italic;">📏 Tamanhos: —</span>`;
+      }
+
       document.getElementById('chartModal').classList.remove('hidden');
       document.getElementById('chartModal').classList.add('flex');
 
@@ -608,19 +641,32 @@
         const res = await fetch(`/api/history/${productId}`);
         const history = await res.json();
 
-        const labels = history.map(h => new Date(h.scraped_at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }));
+        // --- Aqui é o ponto central: formatação no fuso LOCAL do navegador ---
+        const fmt = new Intl.DateTimeFormat('pt-BR', {
+          day: '2-digit',
+          month: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          timeZone: localTZ,
+        });
+
+        const labels = history.map(h => {
+          const d = new Date(h.scraped_at); // parses 'Z' como UTC
+          return isNaN(d) ? '' : fmt.format(d); // renderiza no fuso local
+        });
         const prices = history.map(h => h.price);
+        const fullTimestamps = history.map(h => {
+          const d = new Date(h.scraped_at);
+          return isNaN(d) ? '' : d.toLocaleString('pt-BR', { timeZone: localTZ });
+        });
 
         const ctx = document.getElementById('priceChart').getContext('2d');
-
-        if (priceChartInstance) {
-          priceChartInstance.destroy();
-        }
+        if (priceChartInstance) priceChartInstance.destroy();
 
         priceChartInstance = new Chart(ctx, {
           type: 'line',
           data: {
-            labels: labels,
+            labels,
             datasets: [{
               label: 'Preço (R$)',
               data: prices,
@@ -633,12 +679,13 @@
               pointBorderColor: '#4A3F55',
               pointBorderWidth: 2,
               pointRadius: 5,
-              pointHoverRadius: 7
+              pointHoverRadius: 7,
             }]
           },
           options: {
             responsive: true,
             maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
             plugins: {
               legend: { display: false },
               tooltip: {
@@ -647,25 +694,27 @@
                 bodyFont: { family: 'Nunito', weight: '700' },
                 padding: 10,
                 cornerRadius: 10,
-                displayColors: false
+                displayColors: false,
+                callbacks: {
+                  // Mostra data/hora completa + fuso, já convertidos
+                  title: (items) => {
+                    const i = items[0].dataIndex;
+                    return `${fullTimestamps[i]} (${tzLabel})`;
+                  },
+                  label: (item) => `Preço: R$ ${Number(item.raw).toFixed(2)}`,
+                }
               }
             },
             scales: {
               y: {
                 grid: { color: '#E6E6FA' },
                 border: { display: false },
-                ticks: {
-                  color: '#8B7F95',
-                  font: { family: 'Nunito', weight: '700' }
-                }
+                ticks: { color: '#8B7F95', font: { family: 'Nunito', weight: '700' } }
               },
               x: {
                 grid: { display: false },
                 border: { display: false },
-                ticks: {
-                  color: '#8B7F95',
-                  font: { family: 'Nunito', weight: '700' }
-                }
+                ticks: { color: '#8B7F95', font: { family: 'Nunito', weight: '700' } }
               }
             }
           }
@@ -680,7 +729,6 @@
       document.getElementById('chartModal').classList.remove('flex');
     }
 
-    // Carrega os produtos ao iniciar
     loadProducts();
   </script>
 </body>
