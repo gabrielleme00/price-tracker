@@ -1,12 +1,32 @@
-FROM mcr.microsoft.com/playwright/python:v1.40.0-jammy
+FROM python:3.10-slim
 
 WORKDIR /app
+
+# Instala as dependências de sistema necessárias para o Chromium rodar no Linux (headless)
+RUN apt-get update && apt-get install -y \
+    curl \
+    libnss3 \
+    libnspr4 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxrandr2 \
+    libgbm1 \
+    libpango-1.0-0 \
+    libcairo2 \
+    libasound2 \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install browser dependencies for Playwright
-RUN playwright install-deps chromium
+# Instala o binário do Chromium compatível com a versão exata do pacote Python
+RUN playwright install chromium
 
 COPY . .
 

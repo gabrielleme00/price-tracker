@@ -1,20 +1,34 @@
 import os
 import sqlite3
 import asyncio
-import re
-from datetime import datetime
-from typing import Optional
-from fastapi import FastAPI, HTTPException
+import time
+import logging
+import sys
+from typing import Optional, Dict, List
+from fastapi import FastAPI
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.interval import IntervalTrigger
-from playwright.async_api import async_playwright
+from apscheduler.triggers.cron import CronTrigger
 import requests
+
+# Módulos do projeto adaptado
+from utils.browser_config import get_browser_context
+from utils.page_handler import setup_page_handlers
+from utils.captcha_monitor import with_captcha_check, CaptchaDetected
+
+DEBUG_SAVE_DEBUG = True
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger("price-tracker")
 
 app = FastAPI(title="Self-Hosted Price Tracker")
 
-# Mount static frontend
 os.makedirs("static", exist_ok=True)
 os.makedirs("data", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -22,6 +36,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 DB_PATH = "data/tracker.db"
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -32,12 +47,17 @@ def init_db():
             name TEXT NOT NULL,
             store TEXT NOT NULL,
             url TEXT NOT NULL,
-            css_selector TEXT NOT NULL,
+            image_url TEXT DEFAULT '',
             target_price REAL NOT NULL,
             active BOOLEAN DEFAULT 1,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    try:
+        cursor.execute("ALTER TABLE products ADD COLUMN image_url TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS price_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -51,114 +71,268 @@ def init_db():
     conn.commit()
     conn.close()
 
+
 init_db()
+
 
 class ProductCreate(BaseModel):
     name: str
     store: str
     url: str
-    css_selector: str
     target_price: float
+
 
 class ProductUpdate(BaseModel):
     name: Optional[str] = None
     target_price: Optional[float] = None
-    css_selector: Optional[str] = None
     active: Optional[bool] = None
+
 
 def send_telegram(message: str):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        logger.warning("Token ou Chat ID do Telegram não configurados.")
         return
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}, timeout=10)
-    except Exception as e:
-        print(f"Telegram notification error: {e}")
+        
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    # Alterado de Markdown para HTML para suportar URLs complexas perfeitamente
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
+    
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = requests.post(url, json=payload, timeout=20)
+            if resp.status_code == 200:
+                logger.info("Notificação enviada com sucesso para o Telegram.")
+                return
+            else:
+                logger.error(f"Erro ao enviar Telegram (Tentativa {attempt}/{max_retries}): {resp.text}")
+        except Exception as e:
+            logger.error(f"Exceção ao enviar notificação Telegram (Tentativa {attempt}/{max_retries}): {e}")
+        
+        if attempt < max_retries:
+            time.sleep(3)
 
-def parse_price_string(price_str: str) -> float:
-    cleaned = re.sub(r"[^\d,\.]", "", price_str)
-    if "," in cleaned and "." in cleaned:
-        if cleaned.rfind(",") > cleaned.rfind("."):
-            cleaned = cleaned.replace(".", "").replace(",", ".")
-        else:
-            cleaned = cleaned.replace(",", "")
-    elif "," in cleaned:
-        cleaned = cleaned.replace(",", ".")
-    return float(cleaned)
+
+def process_image_url(image_url: str) -> str:
+    """Converte URL de thumbnail para imagem em tamanho real."""
+    if not image_url:
+        return ""
+    base_url = image_url.split('_thumbnail_')[0]
+    if base_url.startswith('//'):
+        base_url = 'https:' + base_url
+    if not any(base_url.endswith(ext) for ext in ('.jpg', '.png', '.jpeg', '.webp')):
+        base_url += '.jpg'
+    return base_url
+
+
+@with_captcha_check
+def navigate_to_product(page, url: str, delay: int = 2):
+    """Navega para a URL verificando se houve redirecionamento para captcha."""
+    page.goto(url)
+    time.sleep(delay)
+
+
+@with_captcha_check
+def scrape_single_shein_product(page, prod: Dict) -> Dict:
+    """Extrai o preço e a primeira foto de 1 URL da SHEIN."""
+    retry_count = 0
+    max_retries = 3
+    url = prod["url"]
+
+    while retry_count < max_retries:
+        try:
+            navigate_to_product(page, url)
+
+            page.wait_for_selector(
+                ".product-intro__head-sku-text, .product-intro__head-name",
+                timeout=10000,
+                state="visible"
+            )
+
+            price_element = page.locator(".productPrice__main").first
+            raw_price = price_element.text_content().strip() if price_element else None
+
+            if not raw_price:
+                raise ValueError("Elemento '.productPrice__main' vazio ou não encontrado.")
+
+            cleaned = raw_price.replace("R$", "").replace(".", "").replace(",", ".").strip()
+            price = float(cleaned)
+
+            image_url = ""
+            try:
+                page.wait_for_selector('.crop-image-container', timeout=5000)
+                container = page.locator('.crop-image-container').first
+                if container:
+                    src = container.get_attribute('data-before-crop-src')
+                    if src:
+                        image_url = process_image_url(src)
+            except Exception as e:
+                logger.warning(f"Não foi possível extrair a imagem: {e}")
+
+            return {"price": price, "image_url": image_url}
+
+        except CaptchaDetected:
+            raise
+
+        except Exception as e:
+            retry_count += 1
+            if retry_count >= max_retries:
+                if DEBUG_SAVE_DEBUG:
+                    try:
+                        page.screenshot(path=f"/app/data/debug_product_{prod['id']}.png", full_page=True)
+                        with open(f"/app/data/debug_product_{prod['id']}.html", "w", encoding="utf-8") as f:
+                            f.write(page.content())
+                    except Exception as debug_err:
+                        logger.error(f"Erro ao salvar debug: {debug_err}")
+                raise Exception(f"Falhou após {max_retries} tentativas: {str(e)}")
+
+            logger.warning(f"Tentativa {retry_count}/{max_retries} falhou para '{prod['name']}': {e}")
+            time.sleep(2 * retry_count)
+
+
+def run_sync_batch_scrape(products: List[Dict]) -> List[str]:
+    """Executa a varredura síncrona (1 URL por vez) reutilizando a mesma sessão do browser."""
+    digest_lines = []
+    price_dropped_any = False
+    playwright, browser, context = get_browser_context()
+
+    try:
+        page = context.new_page()
+        setup_page_handlers(page)
+
+        logger.info("Aquecendo sessão na página inicial da SHEIN...")
+        navigate_to_product(page, "https://shein.com")
+
+        for prod in products:
+            logger.info(f"Verificando [{prod['id']}] {prod['name']} -> {prod['url']}")
+            
+            last_recorded_price = _get_last_price(prod["id"])
+            price = None
+            image_url = ""
+            status = "ok"
+
+            try:
+                result = scrape_single_shein_product(page, prod)
+                price = result["price"]
+                image_url = result["image_url"]
+                logger.info(f"Preço extraído para '{prod['name']}': R$ {price:.2f} | Imagem: {image_url}")
+                time.sleep(2)
+
+            except CaptchaDetected:
+                status = "error: captcha_detected"
+                logger.error(f"Captcha não resolvido em '{prod['name']}'. Interrompendo ciclo atual.")
+                digest_lines.append(f"🛑 <b>{prod['name']}</b> - Bloqueado por Captcha.")
+                _save_scrape_result(prod["id"], None, "", status)
+                break
+
+            except Exception as e:
+                status = f"error: {str(e)[:50]}"
+                logger.error(f"Erro ao raspar '{prod['name']}': {e}")
+                digest_lines.append(f"⚠️ <b>{prod['name']}</b> - Falha ao extrair preço.")
+                _save_scrape_result(prod["id"], None, "", status)
+                continue
+
+            _save_scrape_result(prod["id"], price, image_url, status)
+
+            is_price_lower = last_recorded_price is None or price < last_recorded_price
+            if is_price_lower:
+                price_dropped_any = True
+
+            is_target_reached = price <= prod["target_price"]
+            
+            prefix = "🚨 " if is_target_reached else ("📉 " if is_price_lower else "▪️ ")
+            drop_notice = " <i>(Preço Abaixou!)</i>" if is_price_lower and last_recorded_price is not None else ""
+
+            # Mensagem limpa estruturada com link HTML funcional
+            product_msg = (
+                f"{prefix} <a href=\"{prod['url']}\"><b>{prod['name']}</b></a> ({prod['store']})\n"
+                f"   💰 Preço: <b>R$ {price:.2f}</b>{drop_notice}\n"
+                f"   🎯 Alvo: R$ {prod['target_price']:.2f}"
+            )
+            digest_lines.append(product_msg)
+
+    except CaptchaDetected:
+        logger.error("Captcha detectado logo na página inicial (warm-up).")
+        digest_lines.insert(0, "🛑 <b>SHEIN</b>: Bloqueio de Captcha na inicialização.")
+    except Exception as e:
+        logger.error(f"Erro crítico no navegador: {e}")
+    finally:
+        try:
+            context.close()
+            browser.close()
+            playwright.stop()
+        except Exception:
+            pass
+
+    if price_dropped_any:
+        header = "🔥 <b>PRECINHO: Queda de preço detectada!</b> \n\n📊 <b>Relatório:</b>"
+    else:
+        header = "📊 <b>Relatório dos Precinhos</b>"
+
+    digest_lines.insert(0, header)
+    return digest_lines
+
+
+def _get_last_price(product_id: int) -> Optional[float]:
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT price FROM price_history WHERE product_id = ? AND price IS NOT NULL ORDER BY scraped_at DESC LIMIT 1", (product_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+
+def _save_scrape_result(product_id: int, price: Optional[float], image_url: str, status: str):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    if image_url:
+        cursor.execute("UPDATE products SET image_url = ? WHERE id = ?", (image_url, product_id))
+    cursor.execute(
+        "INSERT INTO price_history (product_id, price, status) VALUES (?, ?, ?)",
+        (product_id, price, status)
+    )
+    conn.commit()
+    conn.close()
+
 
 async def run_scraping_job():
+    logger.info("--- Iniciando ciclo de varredura de preços ---")
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM products WHERE active = 1")
-    products = cursor.fetchall()
+    products = [dict(row) for row in cursor.fetchall()]
     conn.close()
 
     if not products:
+        logger.info("Nenhum produto ativo cadastrado.")
         return
 
-    digest_lines = ["📊 *Scheduled Price Check Report*"]
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-        )
-        
-        for prod in products:
-            price = None
-            status = "ok"
-            try:
-                page = await context.new_page()
-                # Optimize: block heavy assets
-                await page.route("**/*.{png,jpg,jpeg,gif,svg,css,font,woff,woff2}", lambda route: route.abort())
-                
-                await page.goto(prod["url"], wait_until="domcontentloaded", timeout=30000)
-                await page.wait_for_selector(prod["css_selector"], timeout=10000)
-                price_text = await page.inner_text(prod["css_selector"])
-                price = parse_price_string(price_text)
-                await page.close()
-            except Exception as e:
-                status = f"error: {str(e)[:50]}"
-                print(f"Failed scraping {prod['name']}: {e}")
+    digest_lines = await asyncio.to_thread(run_sync_batch_scrape, products)
 
-            # Save to DB
-            conn = sqlite3.connect(DB_PATH)
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO price_history (product_id, price, status) VALUES (?, ?, ?)",
-                (prod["id"], price, status)
-            )
-            conn.commit()
-            conn.close()
+    if len(digest_lines) > 1:
+        send_telegram("\n\n".join(digest_lines))
 
-            # Format digest line
-            if price is not None:
-                is_trigger = price <= prod["target_price"]
-                prefix = "🚨 " if is_trigger else "▪️ "
-                line = f"{prefix}*{prod['name']}* ({prod['store']}): R$ {price:.2f} (Alvo: R$ {prod['target_price']:.2f})"
-                digest_lines.append(line)
-            else:
-                digest_lines.append(f"⚠️ *{prod['name']}*: Falha ao extrair preço.")
-            
-            await asyncio.sleep(5)  # Jitter between requests
 
-        await browser.close()
-
-    send_telegram("\n".join(digest_lines))
-
-# Scheduler setup
+# Scheduler a cada 3 horas
 scheduler = AsyncIOScheduler()
-# Uncomment to enable automatic 3-hour interval:
-# scheduler.add_job(run_scraping_job, IntervalTrigger(hours=3))
+scheduler.add_job(
+    run_scraping_job, 
+    CronTrigger(hour="*/3", minute=0), 
+    id="scraping_cron_job",
+    replace_existing=True
+)
 
 @app.on_event("startup")
 async def startup_event():
-    await scheduler.start()
+    scheduler.start()
+    logger.info("Scheduler iniciado com sucesso.")
 
-# --- API Endpoints ---
+
 @app.get("/")
 def read_index():
-    return {"message": "Price Tracker API is running. Access UI at /static/index.html"}
+    return FileResponse("static/index.html")
+
 
 @app.get("/api/products")
 def get_products():
@@ -166,7 +340,7 @@ def get_products():
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute("""
-        p.*, 
+        SELECT p.*, 
         (SELECT price FROM price_history WHERE product_id = p.id ORDER BY scraped_at DESC LIMIT 1) as last_price,
         (SELECT status FROM price_history WHERE product_id = p.id ORDER BY scraped_at DESC LIMIT 1) as last_status,
         (SELECT scraped_at FROM price_history WHERE product_id = p.id ORDER BY scraped_at DESC LIMIT 1) as last_scraped
@@ -176,17 +350,19 @@ def get_products():
     conn.close()
     return rows
 
+
 @app.post("/api/products")
 def add_product(prod: ProductCreate):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO products (name, store, url, css_selector, target_price) VALUES (?, ?, ?, ?, ?)",
-        (prod.name, prod.store, prod.url, prod.css_selector, prod.target_price)
+        "INSERT INTO products (name, store, url, target_price) VALUES (?, ?, ?, ?)",
+        (prod.name, prod.store, prod.url, prod.target_price)
     )
     conn.commit()
     conn.close()
     return {"status": "success"}
+
 
 @app.put("/api/products/{product_id}")
 def update_product(product_id: int, prod: ProductUpdate):
@@ -198,6 +374,7 @@ def update_product(product_id: int, prod: ProductUpdate):
     conn.close()
     return {"status": "success"}
 
+
 @app.delete("/api/products/{product_id}")
 def delete_product(product_id: int):
     conn = sqlite3.connect(DB_PATH)
@@ -208,17 +385,23 @@ def delete_product(product_id: int):
     conn.close()
     return {"status": "success"}
 
+
 @app.get("/api/history/{product_id}")
 def get_history(product_id: int):
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute("SELECT price, status, scraped_at FROM price_history WHERE product_id = ? ORDER BY scraped_at ASC LIMIT 100", (product_id,))
+    cursor.execute(
+        "SELECT price, status, scraped_at FROM price_history WHERE product_id = ? ORDER BY scraped_at ASC LIMIT 100",
+        (product_id,)
+    )
     rows = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return rows
 
+
 @app.post("/api/scrape-now")
 async def scrape_now():
+    logger.info("Requisição manual recebida no endpoint /api/scrape-now")
     asyncio.create_task(run_scraping_job())
     return {"status": "Scrape job triggered in background"}
